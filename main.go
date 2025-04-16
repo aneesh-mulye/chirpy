@@ -19,9 +19,9 @@ func main() {
 	smux.Handle("/app/",
 		apiCfg.middlewareMetricsInc(http.StripPrefix(
 			"/app", http.FileServer(http.Dir("./app/")))))
-	smux.HandleFunc("POST /reset", apiCfg.handlerReset)
-	smux.HandleFunc("GET /metrics", apiCfg.handlerMetrics)
-	smux.HandleFunc("GET /healthz",
+	smux.HandleFunc("POST /admin/reset", apiCfg.handlerReset)
+	smux.HandleFunc("GET /admin/metrics", apiCfg.handlerMetrics)
+	smux.HandleFunc("GET /api/healthz",
 		func(rw http.ResponseWriter, req *http.Request) {
 			rw.Header().Add("Content-Type", "text/plain; charset=utf-8")
 			rw.WriteHeader(200)
@@ -55,10 +55,18 @@ func (cfg *apiConfig) handlerReset(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Add("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Add("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(200)
-	_, err := w.Write([]byte(fmt.Sprintf("Hits: %d", cfg.fileserverHits.Load())))
+	_, err := w.Write(fmt.Appendf([]byte{},
+		metricsTemplate, cfg.fileserverHits.Load()))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error writing response: %s", err.Error())
 	}
 }
+
+var metricsTemplate = `<html>
+  <body>
+    <h1>Welcome, Chirpy Admin</h1>
+    <p>Chirpy has been visited %d times!</p>
+  </body>
+</html>`
