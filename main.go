@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"sync/atomic"
@@ -30,6 +32,7 @@ func main() {
 				fmt.Fprintf(os.Stderr, "error writing response: %s", err.Error())
 			}
 		})
+	smux.HandleFunc("POST /api/validate_chirp", handlerValidate)
 	srv.Handler = smux
 	err := srv.ListenAndServe()
 	if err != nil {
@@ -62,6 +65,58 @@ func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, _ *http.Request) {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error writing response: %s", err.Error())
 	}
+}
+
+func handlerValidate(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Body string `json:"body"`
+	}
+	type errorResponse struct {
+		Error string `json:"error"`
+	}
+	type validResponse struct {
+		Valid bool `json:"valid"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		errorStr := fmt.Sprintf("Error decoding parameters: %s", err.Error())
+		log.Println(errorStr)
+		http.Error(w, errorStr, 500)
+		return
+	}
+
+	if len(params.Body) <= 140 {
+		err = respondWithJSON(w, 200, validResponse{Valid: true})
+		if err != nil {
+			log.Println(err.Error())
+			http.Error(w, err.Error(), 500)
+			return
+		}
+	} else {
+		if err = respondWithJSON(w, 400, errorResponse{Error: "Chirp is too long"}); err != nil {
+			log.Println(err.Error())
+			http.Error(w, err.Error(), 500)
+			return
+		}
+	}
+}
+
+func respondWithJSON(w http.ResponseWriter, code int, payload any) error {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	dat, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("Couldn't marshal JSON: %w", err)
+	}
+	_, err = w.Write(dat)
+	if err != nil {
+		return fmt.Errorf("Error writing to response: %w", err)
+	}
+
+	return nil
 }
 
 var metricsTemplate = `<html>
