@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync/atomic"
 )
 
@@ -75,7 +76,7 @@ func handlerValidate(w http.ResponseWriter, r *http.Request) {
 		Error string `json:"error"`
 	}
 	type validResponse struct {
-		Valid bool `json:"valid"`
+		CleanedBody string `json:"cleaned_body"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -89,7 +90,7 @@ func handlerValidate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(params.Body) <= 140 {
-		err = respondWithJSON(w, 200, validResponse{Valid: true})
+		err = respondWithJSON(w, 200, validResponse{CleanedBody: cleanupChirp(params.Body)})
 		if err != nil {
 			log.Println(err.Error())
 			http.Error(w, err.Error(), 500)
@@ -117,6 +118,49 @@ func respondWithJSON(w http.ResponseWriter, code int, payload any) error {
 	}
 
 	return nil
+}
+
+func splitWithSpaces(s string) []string {
+	var beg int
+	res := make([]string, 0)
+	if 0 == len(s) {
+		return res
+	}
+	var inWord bool
+	if ' ' != s[0] {
+		inWord = true
+	}
+	for i, r := range s {
+		if (inWord && ' ' != r) || (!inWord && ' ' == r) {
+			continue
+		}
+		res = append(res, s[beg:i])
+		beg = i
+		inWord = !inWord
+	}
+	res = append(res, s[beg:])
+
+	return res
+}
+
+func cleanupChirp(susChirp string) string {
+	susWords := splitWithSpaces(susChirp)
+	cleanWords := make([]string, 0, len(susWords))
+	for _, word := range susWords {
+		if theProfane[strings.ToLower(word)] {
+			cleanWords = append(cleanWords, "****")
+		} else {
+			cleanWords = append(cleanWords, word)
+		}
+	}
+
+	return strings.Join(cleanWords, "")
+}
+
+var theProfane = map[string]bool{
+	"kerfuffle": true,
+	"sharbert":  true,
+	"fornax":    true,
 }
 
 var metricsTemplate = `<html>
