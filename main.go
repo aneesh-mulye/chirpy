@@ -1,6 +1,8 @@
 package main
 
 import (
+	"chirpy/internal/database"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -8,14 +10,32 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+
+	"github.com/joho/godotenv"
+	_ "github.com/lib/pq"
 )
 
 type apiConfig struct {
 	fileserverHits atomic.Int32
+	db             *database.Queries
 }
 
 func main() {
 	var apiCfg apiConfig
+
+	err := godotenv.Load()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Couldn't load .env file: %s", err.Error())
+		return
+	}
+
+	dbURL := os.Getenv("DB_URL")
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Couldn't conect to DB: %s", err.Error())
+		return
+	}
+	apiCfg.db = database.New(db)
 	srv := http.Server{}
 	srv.Addr = ":8080"
 	smux := http.NewServeMux()
@@ -35,7 +55,7 @@ func main() {
 		})
 	smux.HandleFunc("POST /api/validate_chirp", handlerValidate)
 	srv.Handler = smux
-	err := srv.ListenAndServe()
+	err = srv.ListenAndServe()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "server error: %s", err.Error())
 	}
