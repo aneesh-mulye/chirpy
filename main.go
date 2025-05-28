@@ -4,6 +4,7 @@ import (
 	"chirpy/internal/database"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
@@ -21,6 +23,8 @@ type apiConfig struct {
 	db             *database.Queries
 	platform       string
 }
+
+const maxChirpLength = 140
 
 func main() {
 	var apiCfg apiConfig
@@ -59,6 +63,7 @@ func main() {
 		})
 	smux.HandleFunc("POST /api/validate_chirp", handlerValidate)
 	smux.HandleFunc("POST /api/users", apiCfg.handlerUseradd)
+	smux.HandleFunc("POST /api/chirps", handlerChirps)
 	srv.Handler = smux
 	err = srv.ListenAndServe()
 	if err != nil {
@@ -149,6 +154,34 @@ func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
+func handlerChirps(w http.ResponseWriter, r *http.Request) {
+	type parameters struct {
+		Body    string    `json:"body"`
+		User_ID uuid.UUID `json:"user_id"`
+	}
+
+	decoder := json.NewDecoder(r.Body)
+	params := parameters{}
+	err := decoder.Decode(&params)
+	if err != nil {
+		errorStr := fmt.Sprintf("Error decoding parameters: %s", err.Error())
+		log.Println(errorStr)
+		http.Error(w, errorStr, 500)
+		return
+	}
+
+	if valid, err := isChirpValid(params.Body); !valid {
+		errStr := fmt.Sprintf("chirp is not valid: %s", err.Error())
+		log.Println(errStr)
+		http.Error(w, errStr, 400)
+		return
+	}
+
+	// Now directly try to write to the db? And if that fails, just return an
+	// error — but of what kind?
+
+}
+
 func handlerValidate(w http.ResponseWriter, r *http.Request) {
 	type parameters struct {
 		Body string `json:"body"`
@@ -223,6 +256,30 @@ func splitWithSpaces(s string) []string {
 	res = append(res, s[beg:])
 
 	return res
+}
+
+func isChirpValid(chirp string) (bool, error) {
+	if !isChirpLengthValid(chirp) {
+		return false, errors.New("chirp of invalid length")
+	}
+	if !isChirpClean(chirp) {
+		return false, errors.New("chirp is scandalous(!)")
+	}
+	return true, nil
+}
+
+func isChirpClean(susChirp string) bool {
+	susWords := splitWithSpaces(susChirp)
+	for _, word := range susWords {
+		if theProfane[strings.ToLower(word)] {
+			return false
+		}
+	}
+	return true
+}
+
+func isChirpLengthValid(chirp string) bool {
+	return len(chirp) <= maxChirpLength
 }
 
 func cleanupChirp(susChirp string) string {
