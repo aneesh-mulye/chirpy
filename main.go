@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
@@ -18,6 +19,7 @@ import (
 type apiConfig struct {
 	fileserverHits atomic.Int32
 	db             *database.Queries
+	platform       string
 }
 
 func main() {
@@ -36,6 +38,7 @@ func main() {
 		return
 	}
 	apiCfg.db = database.New(db)
+	apiCfg.platform = os.Getenv("PLATFORM")
 	srv := http.Server{}
 	srv.Addr = ":8080"
 	smux := http.NewServeMux()
@@ -47,13 +50,15 @@ func main() {
 	smux.HandleFunc("GET /api/healthz",
 		func(rw http.ResponseWriter, req *http.Request) {
 			rw.Header().Add("Content-Type", "text/plain; charset=utf-8")
-			rw.WriteHeader(200)
 			_, err := rw.Write([]byte("OK"))
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error writing response: %s", err.Error())
+				rw.WriteHeader(500)
 			}
+			rw.WriteHeader(200)
 		})
 	smux.HandleFunc("POST /api/validate_chirp", handlerValidate)
+	smux.HandleFunc("POST /api/users", apiCfg.handlerUseradd)
 	srv.Handler = smux
 	err = srv.ListenAndServe()
 	if err != nil {
@@ -68,21 +73,77 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 	})
 }
 
-func (cfg *apiConfig) handlerReset(w http.ResponseWriter, _ *http.Request) {
-	cfg.fileserverHits.Store(0)
+func (cfg *apiConfig) handlerUseradd(w http.ResponseWriter, r *http.Request) {
+	type CUReq struct {
+		Email string `json:"email"`
+	}
+	type Response struct {
+		ID         string    `json:"id"`
+		Created_at time.Time `json:"created_at"`
+		Updated_at time.Time `json:"updated_at"`
+		Email      string    `json:"email"`
+	}
+	// First, parse the request
+	decoder := json.NewDecoder(r.Body)
+	request := CUReq{}
+	err := decoder.Decode(&request)
+	if err != nil {
+		errorStr := fmt.Sprintf("Error decoding parameters: %s", err.Error())
+		log.Println(errorStr)
+		http.Error(w, errorStr, 500)
+		return
+	}
+	// Then, try to add the user
+	createdUser, err := cfg.db.CreateUser(r.Context(), request.Email)
+	if err != nil {
+		errorStr := fmt.Sprintf("Error creating user: %s", err.Error())
+		log.Println(errorStr)
+		http.Error(w, errorStr, 500)
+	}
+	// TODO: Q: what happens if the user is already there?
+	response := Response{
+		ID:         createdUser.ID.String(),
+		Created_at: createdUser.CreatedAt,
+		Updated_at: createdUser.UpdatedAt,
+		Email:      createdUser.Email,
+	}
+
+	// Marshal newly created data into a JSON struct, and return it.
+	err = respondWithJSON(w, 201, response)
+	if err != nil {
+		errorStr := fmt.Sprintf("Error responding: %s", err.Error())
+		log.Println(errorStr)
+	}
+}
+
+func (cfg *apiConfig) handlerReset(w http.ResponseWriter, r *http.Request) {
+	if cfg.platform != "dev" {
+		w.WriteHeader(403)
+		return
+	}
 	w.Header().Add("Content-Type", "text/plain; charset=utf-8")
-	w.WriteHeader(200)
-	_, err := w.Write([]byte("OK"))
+	err := cfg.db.Reset(r.Context())
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error writing response: %s", err.Error())
+		w.WriteHeader(500)
+		return
 	}
+	cfg.fileserverHits.Store(0)
+	w.WriteHeader(200)
+	_, err = w.Write([]byte("OK"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error writing response: %s", err.Error())
+		w.WriteHeader(500)
+		return
+	}
+
 }
 
 func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Add("Content-Type", "text/html; charset=utf-8")
-	w.WriteHeader(200)
 	_, err := w.Write(fmt.Appendf([]byte{},
 		metricsTemplate, cfg.fileserverHits.Load()))
+	w.WriteHeader(200)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error writing response: %s", err.Error())
 	}
@@ -127,14 +188,15 @@ func handlerValidate(w http.ResponseWriter, r *http.Request) {
 
 func respondWithJSON(w http.ResponseWriter, code int, payload any) error {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
 	dat, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("Couldn't marshal JSON: %w", err)
+		return fmt.Errorf("couldn't marshal JSON: %w", err)
 	}
+	w.WriteHeader(code)
 	_, err = w.Write(dat)
 	if err != nil {
-		return fmt.Errorf("Error writing to response: %w", err)
+		w.WriteHeader(500)
+		return fmt.Errorf("error writing to response: %w", err)
 	}
 
 	return nil
@@ -143,15 +205,15 @@ func respondWithJSON(w http.ResponseWriter, code int, payload any) error {
 func splitWithSpaces(s string) []string {
 	var beg int
 	res := make([]string, 0)
-	if 0 == len(s) {
+	if len(s) == 0 {
 		return res
 	}
 	var inWord bool
-	if ' ' != s[0] {
+	if s[0] != ' ' {
 		inWord = true
 	}
 	for i, r := range s {
-		if (inWord && ' ' != r) || (!inWord && ' ' == r) {
+		if (inWord && r != ' ') || (!inWord && r == ' ') {
 			continue
 		}
 		res = append(res, s[beg:i])
