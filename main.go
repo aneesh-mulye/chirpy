@@ -63,7 +63,7 @@ func main() {
 		})
 	smux.HandleFunc("POST /api/validate_chirp", handlerValidate)
 	smux.HandleFunc("POST /api/users", apiCfg.handlerUseradd)
-	smux.HandleFunc("POST /api/chirps", handlerChirps)
+	smux.HandleFunc("POST /api/chirps", apiCfg.handlerChirps)
 	srv.Handler = smux
 	err = srv.ListenAndServe()
 	if err != nil {
@@ -104,8 +104,8 @@ func (cfg *apiConfig) handlerUseradd(w http.ResponseWriter, r *http.Request) {
 		errorStr := fmt.Sprintf("Error creating user: %s", err.Error())
 		log.Println(errorStr)
 		http.Error(w, errorStr, 500)
+		return
 	}
-	// TODO: Q: what happens if the user is already there?
 	response := Response{
 		ID:         createdUser.ID.String(),
 		Created_at: createdUser.CreatedAt,
@@ -154,15 +154,22 @@ func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
-func handlerChirps(w http.ResponseWriter, r *http.Request) {
-	type parameters struct {
-		Body    string    `json:"body"`
-		User_ID uuid.UUID `json:"user_id"`
+func (cfg *apiConfig) handlerChirps(w http.ResponseWriter, r *http.Request) {
+	type CCReq struct {
+		Body   string    `json:"body"`
+		UserID uuid.UUID `json:"user_id"`
+	}
+	type Response struct {
+		ID         string    `json:"id"`
+		Created_at time.Time `json:"created_at"`
+		Updated_at time.Time `json:"updated_at"`
+		Body       string    `json:"body"`
+		UserID     string    `json:"user_id"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
-	params := parameters{}
-	err := decoder.Decode(&params)
+	request := CCReq{}
+	err := decoder.Decode(&request)
 	if err != nil {
 		errorStr := fmt.Sprintf("Error decoding parameters: %s", err.Error())
 		log.Println(errorStr)
@@ -170,7 +177,7 @@ func handlerChirps(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if valid, err := isChirpValid(params.Body); !valid {
+	if valid, err := isChirpValid(request.Body); !valid {
 		errStr := fmt.Sprintf("chirp is not valid: %s", err.Error())
 		log.Println(errStr)
 		http.Error(w, errStr, 400)
@@ -179,6 +186,33 @@ func handlerChirps(w http.ResponseWriter, r *http.Request) {
 
 	// Now directly try to write to the db? And if that fails, just return an
 	// error — but of what kind?
+	// TODO: not distinquishing currently between user already exists, and
+	// some other DB problem. Fixing this sometime, maybe.
+	createdChirp, err := cfg.db.CreateChirp(r.Context(),
+		database.CreateChirpParams{
+			Body:   request.Body,
+			UserID: request.UserID,
+		})
+	if err != nil {
+		errorStr := fmt.Sprintf("Error creating chirp: %s", err.Error())
+		log.Println(errorStr)
+		http.Error(w, errorStr, 500)
+		return
+	}
+	response := Response{
+		ID:         createdChirp.ID.String(),
+		Created_at: createdChirp.CreatedAt,
+		Updated_at: createdChirp.UpdatedAt,
+		Body:       createdChirp.Body,
+		UserID:     createdChirp.UserID.String(),
+	}
+
+	// Marshal newly created data into a JSON struct, and return it.
+	err = respondWithJSON(w, 201, response)
+	if err != nil {
+		errorStr := fmt.Sprintf("Error responding: %s", err.Error())
+		log.Println(errorStr)
+	}
 
 }
 
