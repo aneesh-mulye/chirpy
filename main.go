@@ -63,7 +63,9 @@ func main() {
 		})
 	smux.HandleFunc("POST /api/validate_chirp", handlerValidate)
 	smux.HandleFunc("POST /api/users", apiCfg.handlerUseradd)
-	smux.HandleFunc("POST /api/chirps", apiCfg.handlerChirps)
+	smux.HandleFunc("POST /api/chirps", apiCfg.handlerChirpadd)
+	smux.HandleFunc("GET /api/chirps", apiCfg.handlerAllChirps)
+	smux.HandleFunc("GET /api/chirps/{id}", apiCfg.handlerChirp)
 	srv.Handler = smux
 	err = srv.ListenAndServe()
 	if err != nil {
@@ -76,6 +78,84 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 		cfg.fileserverHits.Add(1)
 		next.ServeHTTP(w, req)
 	})
+}
+
+func (cfg *apiConfig) handlerChirp(w http.ResponseWriter, r *http.Request) {
+	type Chirp struct {
+		ID         string    `json:"id"`
+		Created_at time.Time `json:"created_at"`
+		Updated_at time.Time `json:"updated_at"`
+		Body       string    `json:"body"`
+		UserID     string    `json:"user_id"`
+	}
+	// Get the ID
+	reqID := r.PathValue("id")
+	// Make sure it's a valid UUID
+	chirpID, err := uuid.Parse(reqID)
+	if err != nil {
+		errorStr := fmt.Sprintf("Not a valid Chirp ID (UUID): %s: %s",
+			reqID, err.Error())
+		log.Println(errorStr)
+		http.Error(w, errorStr, 400)
+		return
+	}
+	// DB query
+	dbchirp, err := cfg.db.GetChirpByID(r.Context(), chirpID)
+	if err != nil {
+		errorStr := fmt.Sprintf("Error fetching Chirp: %s", err.Error())
+		log.Println(errorStr)
+		http.Error(w, errorStr, 500)
+		return
+	}
+	// Send response
+	err = respondWithJSON(w, 200,
+		Chirp{
+			ID:         dbchirp.ID.String(),
+			Created_at: dbchirp.CreatedAt,
+			Updated_at: dbchirp.UpdatedAt,
+			Body:       dbchirp.Body,
+			UserID:     dbchirp.UserID.String(),
+		})
+	if err != nil {
+		errorStr := fmt.Sprintf("Error responding: %s", err.Error())
+		log.Println(errorStr)
+	}
+}
+
+func (cfg *apiConfig) handlerAllChirps(w http.ResponseWriter, r *http.Request) {
+	type Chirp struct {
+		ID         string    `json:"id"`
+		Created_at time.Time `json:"created_at"`
+		Updated_at time.Time `json:"updated_at"`
+		Body       string    `json:"body"`
+		UserID     string    `json:"user_id"`
+	}
+
+	dbchirps, err := cfg.db.GetAllChirps(r.Context())
+	if err != nil {
+		errorStr := fmt.Sprintf("Error fetching chirps: %s", err.Error())
+		log.Println(errorStr)
+		http.Error(w, errorStr, 500)
+		return
+	}
+
+	chirps := []Chirp{}
+	for _, dbchirp := range dbchirps {
+		chirps = append(chirps,
+			Chirp{
+				ID:         dbchirp.ID.String(),
+				Created_at: dbchirp.CreatedAt,
+				Updated_at: dbchirp.UpdatedAt,
+				Body:       dbchirp.Body,
+				UserID:     dbchirp.UserID.String(),
+			})
+	}
+
+	err = respondWithJSON(w, 200, chirps)
+	if err != nil {
+		errorStr := fmt.Sprintf("Error responding: %s", err.Error())
+		log.Println(errorStr)
+	}
 }
 
 func (cfg *apiConfig) handlerUseradd(w http.ResponseWriter, r *http.Request) {
@@ -154,12 +234,12 @@ func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, _ *http.Request) {
 	}
 }
 
-func (cfg *apiConfig) handlerChirps(w http.ResponseWriter, r *http.Request) {
+func (cfg *apiConfig) handlerChirpadd(w http.ResponseWriter, r *http.Request) {
 	type CCReq struct {
 		Body   string    `json:"body"`
 		UserID uuid.UUID `json:"user_id"`
 	}
-	type Response struct {
+	type Chirp struct {
 		ID         string    `json:"id"`
 		Created_at time.Time `json:"created_at"`
 		Updated_at time.Time `json:"updated_at"`
@@ -199,7 +279,7 @@ func (cfg *apiConfig) handlerChirps(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, errorStr, 500)
 		return
 	}
-	response := Response{
+	response := Chirp{
 		ID:         createdChirp.ID.String(),
 		Created_at: createdChirp.CreatedAt,
 		Updated_at: createdChirp.UpdatedAt,
