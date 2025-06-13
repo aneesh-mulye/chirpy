@@ -1,6 +1,7 @@
 package main
 
 import (
+	"chirpy/internal/auth"
 	"chirpy/internal/database"
 	"database/sql"
 	"encoding/json"
@@ -63,6 +64,7 @@ func main() {
 		})
 	smux.HandleFunc("POST /api/validate_chirp", handlerValidate)
 	smux.HandleFunc("POST /api/users", apiCfg.handlerUseradd)
+	smux.HandleFunc("POST /api/login", apiCfg.handlerLogin)
 	smux.HandleFunc("POST /api/chirps", apiCfg.handlerChirpadd)
 	smux.HandleFunc("GET /api/chirps", apiCfg.handlerAllChirps)
 	smux.HandleFunc("GET /api/chirps/{id}", apiCfg.handlerChirp)
@@ -158,9 +160,68 @@ func (cfg *apiConfig) handlerAllChirps(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (cfg *apiConfig) handlerLogin(w http.ResponseWriter, r *http.Request) {
+	type LoginReq struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	type LoginResponse struct {
+		ID         string    `json:"id"`
+		Created_at time.Time `json:"created_at"`
+		Updated_at time.Time `json:"updated_at"`
+		Email      string    `json:"email"`
+	}
+
+	// Parse the request
+	decoder := json.NewDecoder(r.Body)
+	request := LoginReq{}
+	err := decoder.Decode(&request)
+	if err != nil {
+		errorStr := fmt.Sprintf("Error decoding parameters: %s", err.Error())
+		log.Println(errorStr)
+		http.Error(w, errorStr, 500)
+		return
+	}
+
+	// Get the password hash of the password from the request.
+	//reqPasswordHash, err := auth.HashPassword(request.Password)
+	//if err != nil {
+	//	log.Printf("Password from request cannot be hashed: %s", err.Error())
+	//	http.Error(w, "Incorrect email or password.", http.StatusUnauthorized)
+	//	return
+	//}
+	// Get the user from the DB.
+	storedUser, err := cfg.db.GetUserByEmail(r.Context(), request.Email)
+	if err != nil {
+		log.Printf("Error fetching user from DB: %s", err.Error())
+		http.Error(w, "Incorrect email or password.", http.StatusUnauthorized)
+		return
+	}
+	// Check if the password hashes match, and respond with 401 if they don't.
+	err = auth.CheckPasswordHash(storedUser.HashedPassword, request.Password)
+	if err != nil {
+		log.Println("Password hashes don't match in login attempt.")
+		http.Error(w, "Incorrect email or password.", http.StatusUnauthorized)
+		return
+	}
+
+	response := LoginResponse{
+		ID:         storedUser.ID.String(),
+		Created_at: storedUser.CreatedAt,
+		Updated_at: storedUser.UpdatedAt,
+		Email:      storedUser.Email,
+	}
+	err = respondWithJSON(w, http.StatusOK, response)
+	if err != nil {
+		errorStr := fmt.Sprintf("Error responding: %s", err.Error())
+		log.Println(errorStr)
+	}
+}
+
 func (cfg *apiConfig) handlerUseradd(w http.ResponseWriter, r *http.Request) {
 	type CUReq struct {
-		Email string `json:"email"`
+		Email    string `json:"email"`
+		Password string `json:"password"`
 	}
 	type Response struct {
 		ID         string    `json:"id"`
@@ -178,8 +239,20 @@ func (cfg *apiConfig) handlerUseradd(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, errorStr, 500)
 		return
 	}
+	// Then, try to get a password hash.
+	hashedPassword, err := auth.HashPassword(request.Password)
+	if err != nil {
+		errorStr := fmt.Sprintf("Error creating user: %s", err.Error())
+		log.Println(errorStr)
+		http.Error(w, errorStr, 400)
+		return
+	}
 	// Then, try to add the user
-	createdUser, err := cfg.db.CreateUser(r.Context(), request.Email)
+	createdUser, err := cfg.db.CreateUser(r.Context(),
+		database.CreateUserParams{
+			Email:          request.Email,
+			HashedPassword: hashedPassword,
+		})
 	if err != nil {
 		errorStr := fmt.Sprintf("Error creating user: %s", err.Error())
 		log.Println(errorStr)
