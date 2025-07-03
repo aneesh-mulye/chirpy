@@ -3,6 +3,7 @@ package auth
 import (
 	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -23,8 +24,11 @@ func HashPassword(password string) (string, error) {
 
 func CheckPasswordHash(hash, password string) error {
 	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
-	if err != nil {
-		return fmt.Errorf("passwords and hash do not match: %w", err)
+	switch {
+	case errors.Is(err, bcrypt.ErrMismatchedHashAndPassword):
+		return fmt.Errorf("password does not match")
+	case err != nil:
+		return fmt.Errorf("invalid hash or comparison failed: %w", err)
 	}
 	return nil
 }
