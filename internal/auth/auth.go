@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -74,4 +75,17 @@ func ValidateJWT(tokenString, tokenSecret string) (uuid.UUID, error) {
 		return uuid.UUID{}, fmt.Errorf("cannot parse UUID: %w", err)
 	}
 	return subjectUUID, nil
+}
+
+func GetBearerToken(headers http.Header) (string, error) {
+	authorization, ok := headers["Authorization"]
+	if !ok {
+		return "", errors.New("no Authorization header found")
+	}
+	for _, authForm := range authorization {
+		if strings.HasPrefix(authForm, "Bearer ") {
+			return strings.Trim(strings.TrimPrefix(authForm, "Bearer "), " \t\r\n"), nil
+		}
+	}
+	return "", errors.New("no bearer token found")
 }
